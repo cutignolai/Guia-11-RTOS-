@@ -31,7 +31,8 @@
 #define LED_G_OFF()          (LED_G_GPIO->PSOR |= (1 << LED_G_PIN))
 #define LED_G_TOGGLE()       (LED_G_GPIO->PTOR |= (1 << LED_G_PIN))
 /*****************************************************************************/
-#define MY_SW         	PORTNUM2PIN(PC,0) // PTC0
+#define SW_2         	PORTNUM2PIN(PC,6) // PTC0
+#define SW_3         	PORTNUM2PIN(PA,4) // PTC0
 
 #define SW_ACTIVE       HIGH
 
@@ -96,6 +97,8 @@ static void Task2(void *p_arg) {            //Cloud
     void* p_msg;
     OS_MSG_SIZE msg_size;
     
+    int i;
+
     while (1) {
     	
         p_msg = OSQPend(&msgqTest, 0, OS_OPT_PEND_BLOCKING, &msg_size, NULL, &os_err);
@@ -114,21 +117,14 @@ static void TaskStart(void *p_arg)          //Main
     // Inicializo los uC/CPU Services
     CPU_Init();
 
-    
-/*************************************************************/
-#if OS_CFG_STAT_TASK_EN > 0u
-    /* (optional) Compute CPU capacity with no task running */
-    OSStatTaskCPUUsageInit(&os_err);
-#endif
+    // Creo la queue
+    OSQCreate(&msgqTest, "Msg Q Test", 16, &os_err);
 
-#ifdef CPU_CFG_INT_DIS_MEAS_EN
-    CPU_IntDisMeasMaxCurReset();
-#endif
-/************************************************************/
-
+    hw_DisableInterrupts();
+    RunInit();
+    hw_EnableInterrupts();
     
-    
-
+    int i;
     // Creo el Task 2
     OSTaskCreate(&Task2TCB, 			//tcb
                  "Task 2",				//name
@@ -162,21 +158,22 @@ static void TaskStart(void *p_arg)          //Main
     while (1) {                     //AppRun
         RunApp();
         
-        OSTimeDlyHMSM(0u, 0u, 1u, 0u, OS_OPT_TIME_HMSM_STRICT, &os_err);
-        LED_G_TOGGLE();
+        //OSTimeDlyHMSM(0u, 0u, 1u, 0u, OS_OPT_TIME_HMSM_STRICT, &os_err);
+        //LED_G_TOGGLE();
     }
 }
 
 /*****************************************************************************/
 
 void RunInit(void){
-    gpioMode(MY_SW, INPUT);
-    gpioIRQ(MY_SW, GPIO_IRQ_MODE_RISING_EDGE, irq_sw);
+    gpioMode(SW_2, INPUT_PULLUP);
+    gpioIRQ(SW_2, GPIO_IRQ_MODE_RISING_EDGE, irq_sw);
+    gpioMode(SW_3, INPUT);
+    gpioIRQ(SW_3, GPIO_IRQ_MODE_RISING_EDGE, irq_sw);
     // Creo el semaforo
     OS_ERR os_err;
     OSSemCreate(&semTest, "Sem Test", 0u, &os_err);
-    // Creo la queue
-    OSQCreate(&msgqTest, "Msg Q Test", 16, &os_err);
+    
 }
 
 void RunApp (void){
@@ -217,10 +214,6 @@ int main(void) {
     hw_Init();
 
     OSInit(&err);
-
-    hw_DisableInterrupts();
-    RunInit();
-    hw_EnableInterrupts();
 
 
     /* RGB LED */
