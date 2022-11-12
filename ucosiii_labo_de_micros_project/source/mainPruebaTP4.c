@@ -1,6 +1,8 @@
 #include "hardware.h"
 #include <os.h>
 #include <stddef.h>		//NULL definition
+#include "gpio.h"
+#include "board.h"
 
 
 /*********************************** LEDS ***********************************/
@@ -29,6 +31,9 @@
 #define LED_G_OFF()          (LED_G_GPIO->PSOR |= (1 << LED_G_PIN))
 #define LED_G_TOGGLE()       (LED_G_GPIO->PTOR |= (1 << LED_G_PIN))
 /*****************************************************************************/
+#define MY_SW         	PORTNUM2PIN(PC,0) // PTC0
+
+#define SW_ACTIVE       HIGH
 
 /*********************************** TASKS ***********************************/
 // Task Start
@@ -53,8 +58,12 @@ static CPU_STK Task3Stk[TASK3_STK_SIZE];
 /*****************************************************************************/
 
 /******************************* SEMAFORO / QUEUE ********************************/
+static OS_SEM semTest;
 static OS_Q msgqTest;
 /*****************************************************************************/
+void RunInit(void);
+void RunApp(void);
+static void irq_sw (void);
 
 
 //os multi
@@ -80,18 +89,24 @@ static void Task3(void *p_arg)
     }
 }
 
-static void Task2(void *p_arg) {
+static void Task2(void *p_arg) {            //Cloud
     (void)p_arg;
     OS_ERR os_err;
-    char msg = 'B';
-
+    
+    void* p_msg;
+    OS_MSG_SIZE msg_size;
+    
     while (1) {
-    	OSQPost(&msgqTest, (void*)(&msg), sizeof(void*), OS_OPT_POST_FIFO, &os_err);
-        OSTimeDlyHMSM(0u, 0u, 0u, 500u, OS_OPT_TIME_HMSM_STRICT, &os_err);
-        LED_R_TOGGLE();
+    	
+        p_msg = OSQPend(&msgqTest, 0, OS_OPT_PEND_BLOCKING, &msg_size, NULL, &os_err);
+
+        if (*((char*)p_msg) == '1'){
+            LED_R_TOGGLE();
+        }
+        //OSTimeDlyHMSM(0u, 0u, 0u, 500u, OS_OPT_TIME_HMSM_STRICT, &os_err); 
     }
 }
-static void TaskStart(void *p_arg)
+static void TaskStart(void *p_arg)          //Main
 {
     (void)p_arg;
     OS_ERR os_err;
@@ -99,6 +114,7 @@ static void TaskStart(void *p_arg)
     // Inicializo los uC/CPU Services
     CPU_Init();
 
+    
 /*************************************************************/
 #if OS_CFG_STAT_TASK_EN > 0u
     /* (optional) Compute CPU capacity with no task running */
@@ -110,8 +126,8 @@ static void TaskStart(void *p_arg)
 #endif
 /************************************************************/
 
-    // Creo el semaforo
-    OSQCreate(&msgqTest, "Msg Q Test", 16, &os_err);
+    
+    
 
     // Creo el Task 2
     OSTaskCreate(&Task2TCB, 			//tcb
@@ -129,7 +145,7 @@ static void TaskStart(void *p_arg)
                  &os_err);
 
     // Creo el Task 3
-        OSTaskCreate(&Task3TCB, 			//tcb
+      /*  OSTaskCreate(&Task3TCB, 			//tcb
                      "Task 3",				//name
                       Task3,				//func
                       0u,					//arg
@@ -141,9 +157,11 @@ static void TaskStart(void *p_arg)
                       0u,
                       0u,
                      (OS_OPT_TASK_STK_CHK | OS_OPT_TASK_STK_CLR),
-                     &os_err);
+                     &os_err);*/
 
-    while (1) {
+    while (1) {                     //AppRun
+        RunApp();
+        
         OSTimeDlyHMSM(0u, 0u, 1u, 0u, OS_OPT_TIME_HMSM_STRICT, &os_err);
         LED_G_TOGGLE();
     }
@@ -151,6 +169,36 @@ static void TaskStart(void *p_arg)
 
 /*****************************************************************************/
 
+void RunInit(void){
+    gpioMode(MY_SW, INPUT);
+    gpioIRQ(MY_SW, GPIO_IRQ_MODE_RISING_EDGE, irq_sw);
+    // Creo el semaforo
+    OS_ERR os_err;
+    OSSemCreate(&semTest, "Sem Test", 0u, &os_err);
+    // Creo la queue
+    OSQCreate(&msgqTest, "Msg Q Test", 16, &os_err);
+}
+
+void RunApp (void){
+    OS_ERR os_err;
+
+    OSSemPend(&semTest, 0, OS_OPT_PEND_BLOCKING, NULL, &os_err);        //el pend multi del tp
+
+    //lectura ok asumida, manda '1' para indicar que entro dueño 1
+    char msg = '1';
+
+    //envía a cloud para que lo actualize en la base de datos
+    OSQPost(&msgqTest, (void*)(&msg), sizeof(void*), OS_OPT_POST_FIFO, &os_err);
+
+
+}
+
+
+
+static void irq_sw (void){
+	OS_ERR os_err;
+    OSSemPost(&semTest, OS_OPT_POST_1, &os_err);           //boton accionado = evento e encoder/tarjeta
+}
 
 
 
@@ -159,10 +207,7 @@ static void TaskStart(void *p_arg)
 
 
 
-
-
-
-int main6(void) {
+int main(void) {
     OS_ERR err;
 
 #if (CPU_CFG_NAME_EN == DEF_ENABLED)
@@ -170,6 +215,13 @@ int main6(void) {
 #endif
 
     hw_Init();
+
+    OSInit(&err);
+
+    hw_DisableInterrupts();
+    RunInit();
+    hw_EnableInterrupts();
+
 
     /* RGB LED */
     SIM->SCGC5 |= (SIM_SCGC5_PORTB_MASK | SIM_SCGC5_PORTE_MASK);
@@ -183,7 +235,6 @@ int main6(void) {
     LED_G_GPIO->PSOR |= (1 << LED_G_PIN);
     LED_R_GPIO->PSOR |= (1 << LED_R_PIN);
 
-    OSInit(&err);
  #if OS_CFG_SCHED_ROUND_ROBIN_EN > 0u
 	 /* Enable task round robin. */
 	 OSSchedRoundRobinCfg((CPU_BOOLEAN)1, 0, &err);
